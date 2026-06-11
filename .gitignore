@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Firebase service account (chave privada - NUNCA commitar)
+*firebase-adminsdk*.json
+*serviceAccount*.json
