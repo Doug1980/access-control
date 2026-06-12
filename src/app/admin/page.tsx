@@ -20,7 +20,7 @@ export default function AdminPage() {
   const { user, loading, logout } = useAuth();
   const router = useRouter();
   const toast = useToast();
-  const { isAdmin, refresh: refreshIsAdmin } = useIsAdmin();
+  const { isAdmin, email: myEmail, refresh: refreshIsAdmin, setAdmin } = useIsAdmin();
 
   const [users, setUsers] = useState<AppUser[]>([]);
   const [fetching, setFetching] = useState(true);
@@ -34,6 +34,17 @@ export default function AdminPage() {
   useEffect(() => {
     usersRef.current = users;
   }, [users]);
+
+  // Espelhos para uso dentro dos handlers do Pusher (sempre valores frescos).
+  const myEmailRef = useRef<string | null>(myEmail);
+  useEffect(() => {
+    myEmailRef.current = myEmail;
+  }, [myEmail]);
+
+  const isAdminRef = useRef(isAdmin);
+  useEffect(() => {
+    isAdminRef.current = isAdmin;
+  }, [isAdmin]);
 
   useEffect(() => {
     if (!loading && !user) router.replace("/login");
@@ -66,7 +77,6 @@ export default function AdminPage() {
     return false;
   }
 
-  // Tempo real: atualiza a lista quando QUALQUER pessoa autorizada altera os dados.
   usePusher({
     onCreated: (raw) => {
       const novo = raw as AppUser;
@@ -85,19 +95,24 @@ export default function AdminPage() {
       );
       toast.success(`${atualizado.name} foi atualizado`);
 
-      // Se o registro alterado é o MEU (mesmo e-mail do login), meu papel pode
-      // ter mudado → re-checo meu status de admin sem precisar de F5.
-      const myEmail = user?.email?.toLowerCase();
-      if (myEmail && atualizado.email?.toLowerCase() === myEmail) {
-        refreshIsAdmin();
-        if (atualizado.role === "admin") {
+      // Se o registro alterado sou EU (comparando com o e-mail confiável vindo
+      // do servidor, não do user.email que pode ser undefined no GitHub),
+      // aplico o role do PRÓPRIO payload — sem re-consultar, sem race com o banco.
+      const meu = myEmailRef.current?.toLowerCase();
+      const alvo = atualizado.email?.toLowerCase();
+      if (meu && alvo && meu === alvo) {
+        const viraAdmin = atualizado.role === "admin";
+        const eraAdmin = isAdminRef.current;
+        setAdmin(viraAdmin);
+        if (!eraAdmin && viraAdmin) {
           toast.success("Você agora é administrador!");
+        } else if (eraAdmin && !viraAdmin) {
+          toast.error("Seu acesso de administrador foi removido.");
         }
       }
     },
     onDeleted: ({ id }) => {
       if (isDuplicate(`deleted:${id}`)) return;
-      // Lê do ref (sempre atualizado), não do closure. Toast fica FORA do updater.
       const alvo = usersRef.current.find((u) => u._id === id);
       setUsers((prev) => prev.filter((u) => u._id !== id));
       if (alvo) toast.success(`${alvo.name} foi removido`);
@@ -123,14 +138,12 @@ export default function AdminPage() {
     } else {
       await usersApi.create(data);
     }
-    // A lista atualiza sozinha via Pusher (onCreated/onUpdated).
   }
 
   async function handleDelete() {
     if (!deleting) return;
     try {
       await usersApi.remove(deleting._id);
-      // A lista atualiza sozinha via Pusher (onDeleted).
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Falha ao excluir.");
     }

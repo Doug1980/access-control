@@ -4,7 +4,6 @@ import { verifyRequest, isAdmin } from "@/lib/auth";
 import { pusherServer } from "@/lib/pusher";
 import type { CreateUserInput } from "@/types/user";
 
-// GET /api/users — listar. Liberado a qualquer usuário autenticado.
 export async function GET(req: Request) {
   const user = await verifyRequest(req);
   if (!user) {
@@ -22,8 +21,6 @@ export async function GET(req: Request) {
   return NextResponse.json(users);
 }
 
-// POST /api/users — criar. Liberado a qualquer autenticado,
-// mas com TRAVA DE PAPEL: só admin pode criar alguém com role "admin".
 export async function POST(req: Request) {
   const user = await verifyRequest(req);
   if (!user) {
@@ -39,9 +36,10 @@ export async function POST(req: Request) {
     );
   }
 
-  // TRAVA DE PAPEL — a fonte da verdade é SEMPRE o servidor.
+  // TRAVA DE PAPEL — fonte da verdade é o servidor.
+  const callerIsAdmin = await isAdmin(user); // <- await
   const role: CreateUserInput["role"] =
-    body.role === "admin" && isAdmin(user) ? "admin" : "user";
+    body.role === "admin" && callerIsAdmin ? "admin" : "user";
 
   const now = new Date().toISOString();
   const newUser = {
@@ -56,9 +54,7 @@ export async function POST(req: Request) {
   const { insertedId } = await db.collection("users").insertOne(newUser);
   const result = { ...newUser, _id: insertedId.toString() };
 
-  await pusherServer
-    .trigger("users", "user:created", result)
-    .catch(() => {});
+  await pusherServer.trigger("users", "user:created", result).catch(() => {});
 
   return NextResponse.json(result, { status: 201 });
 }

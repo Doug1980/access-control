@@ -3,18 +3,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 
-// Descobre se o usuário logado é admin, consultando /api/me.
-// Reconsulta automaticamente quando o usuário muda (sem F5) e expõe
-// um `refresh()` para reconsultar sob demanda (ex.: ao ser promovido em tempo real).
 export function useIsAdmin() {
   const { user, getToken } = useAuth();
   const [isAdmin, setIsAdmin] = useState(false);
+  const [email, setEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const check = useCallback(async () => {
-    // sem usuário logado → não é admin
     if (!user) {
       setIsAdmin(false);
+      setEmail(null);
       setLoading(false);
       return;
     }
@@ -22,26 +20,30 @@ export function useIsAdmin() {
     setLoading(true);
     try {
       const token = await getToken();
-      if (!token) {
-        setIsAdmin(false);
-        return;
-      }
+      if (!token) return; // token transitório nulo: não rebaixa
       const res = await fetch("/api/me", {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (!res.ok) return; // falha temporária: não rebaixa
       const data = await res.json();
-      setIsAdmin(res.ok && data.isAdmin === true);
+      setIsAdmin(data.isAdmin === true);
+      setEmail(data.email ?? null); // e-mail CONFIÁVEL, resolvido no servidor
     } catch {
-      setIsAdmin(false);
+      // erro transitório: mantém estado atual
     } finally {
       setLoading(false);
     }
   }, [user, getToken]);
 
-  // Reconsulta quando o usuário muda.
   useEffect(() => {
     check();
   }, [check]);
 
-  return { isAdmin, loading, refresh: check };
+  // Aplica diretamente um valor de admin (usado quando o evento Pusher já
+  // traz o role atualizado — evita re-consultar o servidor e a race com o banco).
+  const setAdmin = useCallback((value: boolean) => {
+    setIsAdmin(value);
+  }, []);
+
+  return { isAdmin, email, loading, refresh: check, setAdmin };
 }

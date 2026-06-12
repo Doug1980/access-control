@@ -5,10 +5,12 @@ import { verifyRequest, isAdmin } from "@/lib/auth";
 // O front usa isso só para UI; a segurança real continua nas rotas de escrita.
 export async function GET(req: Request) {
   const user = await verifyRequest(req);
-  if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  if (!user) {
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  }
 
   return NextResponse.json({
     email: user.email ?? null,
-    isAdmin: isAdmin(user),
+    isAdmin: await isAdmin(user), // <- agora com await
   });
 }
