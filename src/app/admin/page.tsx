@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/useToast";
 import { usersApi } from "@/lib/api";
+import { usePusher } from "@/hooks/usePusher";
 import { Sidebar } from "@/components/Sidebar";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { StatCard } from "@/components/StatCard";
@@ -18,6 +20,7 @@ export default function AdminPage() {
   const { user, loading, logout } = useAuth();
   const router = useRouter();
   const toast = useToast();
+  const { isAdmin, refresh: refreshIsAdmin } = useIsAdmin();
 
   const [users, setUsers] = useState<AppUser[]>([]);
   const [fetching, setFetching] = useState(true);
@@ -25,6 +28,12 @@ export default function AdminPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<AppUser | null>(null);
   const [deleting, setDeleting] = useState<AppUser | null>(null);
+
+  // Espelho da lista para uso DENTRO dos handlers do Pusher (evita closure obsoleto).
+  const usersRef = useRef<AppUser[]>([]);
+  useEffect(() => {
+    usersRef.current = users;
+  }, [users]);
 
   useEffect(() => {
     if (!loading && !user) router.replace("/login");
@@ -39,16 +48,68 @@ export default function AdminPage() {
     } finally {
       setFetching(false);
     }
-  }, [toast]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (user) load();
   }, [user, load]);
 
+  // Deduplicação de eventos do Pusher (guarda a última key por ~1s).
+  const lastEvent = useRef<string>("");
+  function isDuplicate(key: string) {
+    if (lastEvent.current === key) return true;
+    lastEvent.current = key;
+    setTimeout(() => {
+      if (lastEvent.current === key) lastEvent.current = "";
+    }, 1000);
+    return false;
+  }
+
+  // Tempo real: atualiza a lista quando QUALQUER pessoa autorizada altera os dados.
+  usePusher({
+    onCreated: (raw) => {
+      const novo = raw as AppUser;
+      if (isDuplicate(`created:${novo._id}`)) return;
+      setUsers((prev) =>
+        prev.some((u) => u._id === novo._id) ? prev : [novo, ...prev],
+      );
+      toast.success(`${novo.name} foi adicionado`);
+    },
+    onUpdated: (raw) => {
+      const atualizado = raw as AppUser;
+      if (isDuplicate(`updated:${atualizado._id}:${atualizado.updatedAt}`)) return;
+
+      setUsers((prev) =>
+        prev.map((u) => (u._id === atualizado._id ? atualizado : u)),
+      );
+      toast.success(`${atualizado.name} foi atualizado`);
+
+      // Se o registro alterado é o MEU (mesmo e-mail do login), meu papel pode
+      // ter mudado → re-checo meu status de admin sem precisar de F5.
+      const myEmail = user?.email?.toLowerCase();
+      if (myEmail && atualizado.email?.toLowerCase() === myEmail) {
+        refreshIsAdmin();
+        if (atualizado.role === "admin") {
+          toast.success("Você agora é administrador!");
+        }
+      }
+    },
+    onDeleted: ({ id }) => {
+      if (isDuplicate(`deleted:${id}`)) return;
+      // Lê do ref (sempre atualizado), não do closure. Toast fica FORA do updater.
+      const alvo = usersRef.current.find((u) => u._id === id);
+      setUsers((prev) => prev.filter((u) => u._id !== id));
+      if (alvo) toast.success(`${alvo.name} foi removido`);
+    },
+  });
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return users;
-    return users.filter((u) => u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q));
+    return users.filter(
+      (u) => u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q),
+    );
   }, [users, search]);
 
   const stats = useMemo(() => {
@@ -59,20 +120,17 @@ export default function AdminPage() {
   async function handleSubmit(data: CreateUserInput) {
     if (editing) {
       await usersApi.update(editing._id, data);
-      toast.success("Usuário atualizado.");
     } else {
       await usersApi.create(data);
-      toast.success("Usuário criado.");
     }
-    await load();
+    // A lista atualiza sozinha via Pusher (onCreated/onUpdated).
   }
 
   async function handleDelete() {
     if (!deleting) return;
     try {
       await usersApi.remove(deleting._id);
-      toast.success("Usuário excluído.");
-      await load();
+      // A lista atualiza sozinha via Pusher (onDeleted).
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Falha ao excluir.");
     }
@@ -96,11 +154,17 @@ export default function AdminPage() {
         <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-bg/80 px-5 backdrop-blur-md md:px-8">
           <div>
             <h1 className="text-base font-semibold text-text">Usuários</h1>
-            <p className="hidden text-xs text-text-muted sm:block">Gerencie quem tem acesso ao sistema.</p>
+            <p className="hidden text-xs text-text-muted sm:block">
+              Gerencie quem tem acesso ao sistema.
+            </p>
           </div>
           <div className="flex items-center gap-2">
             <ThemeToggle />
-            <button onClick={logout} className="grid size-9 place-items-center rounded-lg border border-border bg-surface text-text-muted hover:text-danger md:hidden" aria-label="Sair">
+            <button
+              onClick={logout}
+              className="grid size-9 place-items-center rounded-lg border border-border bg-surface text-text-muted hover:text-danger md:hidden"
+              aria-label="Sair"
+            >
               <LogOutIcon className="size-[18px]" />
             </button>
           </div>
@@ -116,9 +180,20 @@ export default function AdminPage() {
           <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="relative w-full sm:max-w-xs">
               <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-faint" />
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar por nome ou e-mail…" className="input pl-9" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Buscar por nome ou e-mail…"
+                className="input pl-9"
+              />
             </div>
-            <button onClick={() => { setEditing(null); setFormOpen(true); }} className="btn-primary">
+            <button
+              onClick={() => {
+                setEditing(null);
+                setFormOpen(true);
+              }}
+              className="btn-primary"
+            >
               <PlusIcon className="size-[18px]" />
               Novo usuário
             </button>
@@ -129,7 +204,11 @@ export default function AdminPage() {
               users={filtered}
               loading={fetching}
               hasSearch={search.trim().length > 0}
-              onEdit={(u) => { setEditing(u); setFormOpen(true); }}
+              canDelete={isAdmin}
+              onEdit={(u) => {
+                setEditing(u);
+                setFormOpen(true);
+              }}
               onDelete={(u) => setDeleting(u)}
             />
           </div>
@@ -143,8 +222,19 @@ export default function AdminPage() {
         </main>
       </div>
 
-      <UserFormModal open={formOpen} user={editing} onClose={() => setFormOpen(false)} onSubmit={handleSubmit} />
-      <ConfirmDialog open={!!deleting} userName={deleting?.name ?? ""} onClose={() => setDeleting(null)} onConfirm={handleDelete} />
+      <UserFormModal
+        open={formOpen}
+        user={editing}
+        canSetAdmin={isAdmin}
+        onClose={() => setFormOpen(false)}
+        onSubmit={handleSubmit}
+      />
+      <ConfirmDialog
+        open={!!deleting}
+        userName={deleting?.name ?? ""}
+        onClose={() => setDeleting(null)}
+        onConfirm={handleDelete}
+      />
     </div>
   );
 }

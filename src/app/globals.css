@@ -1,26 +1,170 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f1f3f6;
+  --border: #e3e7ec;
+  --border-strong: #d2d8e0;
+  --text: #1a1f2b;
+  --text-muted: #5b6472;
+  --text-faint: #8a93a3;
+  --accent: #5b54e8;
+  --accent-hover: #4a43d8;
+  --accent-soft: #ece9fd;
+  --accent-text: #ffffff;
+  --success: #1f9d62;
+  --success-soft: #e3f5ec;
+  --danger: #d94545;
+  --danger-soft: #fbe8e8;
+  --warning: #c98a16;
+  --warning-soft: #fbf1dc;
+  --ring: rgba(91, 84, 232, 0.45);
+  --shadow: 0 1px 2px rgba(16, 20, 30, 0.04), 0 4px 16px rgba(16, 20, 30, 0.06);
+  --shadow-lg: 0 8px 40px rgba(16, 20, 30, 0.14);
+}
+
+.dark {
+  --bg: #0c0f17;
+  --surface: #141926;
+  --surface-2: #1b2130;
+  --border: #262d3d;
+  --border-strong: #333b4d;
+  --text: #eef1f6;
+  --text-muted: #9aa3b4;
+  --text-faint: #6b7589;
+  --accent: #7d76f5;
+  --accent-hover: #918bf7;
+  --accent-soft: rgba(125, 118, 245, 0.14);
+  --accent-text: #ffffff;
+  --success: #34d27f;
+  --success-soft: rgba(52, 210, 127, 0.14);
+  --danger: #f06a6a;
+  --danger-soft: rgba(240, 106, 106, 0.14);
+  --warning: #e3a93a;
+  --warning-soft: rgba(227, 169, 58, 0.14);
+  --ring: rgba(125, 118, 245, 0.5);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 30px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 12px 50px rgba(0, 0, 0, 0.55);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+* { border-color: var(--border); }
+html { background: var(--bg); }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+body, body * {
+  transition-property: background-color, border-color, color, fill, stroke;
+  transition-duration: 160ms;
+  transition-timing-function: ease;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring);
+  border-radius: 8px;
+}
+@media (prefers-reduced-motion: reduce) {
+  body, body * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scale-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.animate-fade-in { animation: fade-in 160ms ease both; }
+.animate-scale-in { animation: scale-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-slide-in-right { animation: slide-in-right 240ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 0%, var(--border) 50%, var(--surface-2) 100%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+@layer components {
+  .input {
+    width: 100%;
+    border-radius: 0.5rem;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    color: var(--text);
+  }
+  .input::placeholder { color: var(--text-faint); }
+  .input:focus-visible {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .btn-primary {
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: 0.5rem; border-radius: 0.5rem; background: var(--accent);
+    padding: 0.5rem 0.9rem; font-size: 0.875rem; font-weight: 600;
+    color: var(--accent-text); white-space: nowrap;
+  }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-ghost {
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: 0.5rem; border-radius: 0.5rem; border: 1px solid var(--border);
+    background: var(--surface); padding: 0.5rem 0.9rem; font-size: 0.875rem;
+    font-weight: 500; color: var(--text-muted);
+  }
+  .btn-ghost:hover { color: var(--text); border-color: var(--border-strong); }
+  .btn-danger {
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: 0.5rem; border-radius: 0.5rem; background: var(--danger);
+    padding: 0.5rem 0.9rem; font-size: 0.875rem; font-weight: 600;
+    color: #fff; white-space: nowrap;
+  }
+  .btn-danger:hover { filter: brightness(1.08); }
+  .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
 }
