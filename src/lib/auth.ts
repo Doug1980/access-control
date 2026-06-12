@@ -18,4 +18,4 @@ export async function verifyRequest(req: Request): Promise<DecodedIdToken | null
 
 export function isAdmin(user: DecodedIdToken): boolean {
   return !!user.email && adminEmails.includes(user.email.toLowerCase());
-}
+}   
