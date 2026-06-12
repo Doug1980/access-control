@@ -5,6 +5,8 @@ import { verifyRequest, isAdmin, isRootAdmin } from "@/lib/auth";
 import { pusherServer } from "@/lib/pusher";
 import type { UpdateUserInput } from "@/types/user";
 
+export const runtime = "nodejs";
+
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> },

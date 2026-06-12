@@ -4,6 +4,8 @@ import { verifyRequest, isAdmin } from "@/lib/auth";
 import { pusherServer } from "@/lib/pusher";
 import type { CreateUserInput } from "@/types/user";
 
+export const runtime = "nodejs";
+
 export async function GET(req: Request) {
   const user = await verifyRequest(req);
   if (!user) {

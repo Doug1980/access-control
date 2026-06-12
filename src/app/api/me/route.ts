@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { verifyRequest, isAdmin } from "@/lib/auth";
 
+export const runtime = "nodejs";
 // Informa ao front quem é o usuário logado e se ele é admin.
 // O front usa isso só para UI; a segurança real continua nas rotas de escrita.
 export async function GET(req: Request) {
