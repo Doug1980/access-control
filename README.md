@@ -7,6 +7,27 @@ Painel de gestão de usuários com autenticação, controle de acesso por papéi
 
 ---
 
+## Preview
+
+<!--
+  Para exibir os screenshots:
+  1. Crie uma pasta `docs/` na raiz do projeto.
+  2. Salve as imagens lá (ex.: docs/login.png, docs/dashboard.png).
+  3. Faça commit das imagens junto com o README.
+  Os caminhos abaixo já apontam para docs/ — basta adicionar os arquivos.
+-->
+
+### Tela de login
+![Tela de login](docs/login.png)
+
+### Painel de usuários
+![Painel de usuários](docs/dashboard.png)
+
+### RBAC dinâmico em tempo real
+![Promoção em tempo real](docs/rbac-tempo-real.png)
+
+---
+
 ## Visão geral
 
 O **Access Control** é um painel administrativo (SaaS-style) onde usuários autenticados gerenciam registros de acesso. O sistema implementa permissões granulares por papel — administradores têm controle total, enquanto usuários comuns têm acesso restrito — e mantém todos os clientes sincronizados em tempo real.
@@ -69,6 +90,34 @@ O front-end esconde botões e ações conforme o papel apenas para guiar o usuá
 
 **Atualização otimista a partir do evento.**
 Para refletir a mudança de papel em tempo real, a aplicação usa o próprio payload do evento WebSocket como fonte da verdade para a UI, evitando uma reconsulta ao servidor que competiria com a propagação da escrita no banco. A autorização efetiva continua sempre validada no servidor a cada requisição.
+
+---
+
+## Desafios técnicos
+
+Esta seção documenta os problemas mais relevantes enfrentados e como foram resolvidos.
+
+### 1. `ERR_REQUIRE_ESM` no ambiente serverless
+
+**Sintoma.** O projeto funcionava perfeitamente em desenvolvimento, mas em produção (Vercel) toda rota de API que validava autenticação retornava erro 500. À primeira vista, parecia falha de conexão com o banco.
+
+**Diagnóstico.** Os logs de runtime revelaram a causa real: o `firebase-admin`, usado para verificar o token no servidor, depende de `jwks-rsa`, que por sua vez importava o `jose` em formato ESM via `require()` (CommonJS) — uma incompatibilidade que só se manifesta no ambiente serverless. Investigando, identifiquei dois fatores combinados: o bundler padrão do Next 16 (Turbopack) não externalizava o pacote corretamente, e a árvore de dependências havia resolvido uma versão ESM-only do `jose`.
+
+**Solução.** Atacar as duas causas: forçar o **Webpack** no build de produção (em vez do Turbopack) e fixar o `jose` em uma versão CommonJS-compatível via `overrides` no `package.json`. O build de produção foi validado localmente antes de cada deploy, evitando tentativas às cegas.
+
+### 2. RBAC dinâmico — race condition na atualização de papel
+
+**Sintoma.** Ao promover um usuário a admin, a mudança só refletia na sessão dele após um refresh manual. Além disso, em certos cenários, o admin que realizava a promoção perdia o próprio acesso temporariamente.
+
+**Diagnóstico.** A aplicação reconsultava o servidor (`/api/me`) ao receber o evento de atualização, mas essa leitura competia com a gravação no banco — frequentemente lendo o papel antigo (race condition). O segundo problema vinha de comparar e-mails no cliente, onde o e-mail do provedor pode vir indefinido.
+
+**Solução.** Em vez de reconsultar o servidor, a UI passou a usar o próprio payload do evento WebSocket como fonte da verdade (atualização otimista), eliminando a corrida com o banco. A identidade do usuário passou a ser resolvida pelo e-mail confiável retornado pelo servidor, e a atualização de papel só é aplicada quando o evento diz respeito ao próprio usuário — preservando o acesso de quem realiza a ação.
+
+### 3. Tempo real em ambiente serverless
+
+**Desafio.** Sincronização em tempo real exige conexões WebSocket persistentes, mas funções serverless são efêmeras — sobem, respondem e encerram, sem manter conexões abertas.
+
+**Solução.** Delegar a camada persistente a um broker gerenciado (Pusher Channels). A API serverless apenas faz uma chamada HTTP rápida para disparar o evento; o Pusher mantém as conexões WebSocket com os clientes e distribui as atualizações. Essa escolha mantém a compatibilidade com o modelo serverless sem exigir um servidor tradicional sempre ativo.
 
 ---
 
