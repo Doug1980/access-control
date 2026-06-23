@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { verifyRequest, isAdmin, isRootAdmin, resolveEmail } from "@/lib/auth";
+import { evaluateUserDeletion } from "@/lib/authz";
 import { pusherServer } from "@/lib/pusher";
 import { validateUpdateUser } from "@/lib/validate";
 import { rateLimit } from "@/lib/rateLimit";
@@ -108,8 +109,21 @@ export async function DELETE(
   if (!user) {
     return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
   }
-  if (!(await isAdmin(user))) {
-    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+
+  const callerIsAdmin = await isAdmin(user);
+
+  // Não-admin: bloqueia já aqui, sem tocar no banco nem vazar a existência de IDs.
+  if (!callerIsAdmin) {
+    const denied = evaluateUserDeletion({
+      callerIsAdmin,
+      callerIsRootAdmin: false,
+      callerEmail: null,
+      target: null,
+      adminCount: 0,
+    });
+    if (!denied.ok) {
+      return NextResponse.json({ error: denied.error }, { status: denied.status });
+    }
   }
 
   const { id } = await params;
@@ -119,39 +133,29 @@ export async function DELETE(
 
   const db = await getDb();
 
-  // Busca o alvo antes de deletar para proteger o root admin.
+  // Projeção inclui `role` — necessário para a regra do "último admin".
   const target = await db
     .collection("users")
-    .findOne({ _id: new ObjectId(id) }, { projection: { email: 1 } });
+    .findOne({ _id: new ObjectId(id) }, { projection: { email: 1, role: 1 } });
 
-  if (!target) {
-    return NextResponse.json({ error: "Usuário não encontrado" }, { status: 404 });
-  }
+  const adminCount =
+    (target?.role as string | undefined) === "admin"
+      ? await db.collection("users").countDocuments({ role: "admin" })
+      : 0;
 
-  // Impede remoção do último admin — sistema ficaria sem gestão.
-  if ((target.role as string) === "admin") {
-    const adminCount = await db.collection("users").countDocuments({ role: "admin" });
-    if (adminCount <= 1) {
-      return NextResponse.json(
-        { error: "Não é possível remover o único administrador do sistema." },
-        { status: 403 },
-      );
-    }
-  }
+  // Decisão de autorização centralizada e testada em src/lib/authz.ts.
+  const decision = evaluateUserDeletion({
+    callerIsAdmin,
+    callerIsRootAdmin: isRootAdmin(user),
+    callerEmail: resolveEmail(user),
+    target: target
+      ? { email: target.email as string, role: target.role as string }
+      : null,
+    adminCount,
+  });
 
-  // Impede autodeleção — o root admin não pode remover a si mesmo.
-  const callerEmail = resolveEmail(user);
-  const targetEmail = (target.email as string | undefined)?.toLowerCase();
-  if (
-    callerEmail &&
-    targetEmail &&
-    callerEmail === targetEmail &&
-    isRootAdmin(user)
-  ) {
-    return NextResponse.json(
-      { error: "Você não pode remover sua própria conta de administrador raiz." },
-      { status: 403 },
-    );
+  if (!decision.ok) {
+    return NextResponse.json({ error: decision.error }, { status: decision.status });
   }
 
   const { deletedCount } = await db
