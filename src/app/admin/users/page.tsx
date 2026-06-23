@@ -158,13 +158,15 @@ export default function UsersPage() {
                 className="input pl-9"
               />
             </div>
-            <button
-              onClick={() => { setEditing(null); setFormOpen(true); }}
-              className="btn-primary"
-            >
-              <PlusIcon className="size-[18px]" />
-              Novo usuario
-            </button>
+            {isAdmin && (
+              <button
+                onClick={() => { setEditing(null); setFormOpen(true); }}
+                className="btn-primary"
+              >
+                <PlusIcon className="size-[18px]" />
+                Novo usuario
+              </button>
+            )}
           </div>
 
           <div className="mt-4">
@@ -173,6 +175,7 @@ export default function UsersPage() {
               loading={fetching}
               hasSearch={search.trim().length > 0}
               canDelete={isAdmin}
+              canEdit={isAdmin}
               onEdit={(u) => { setEditing(u); setFormOpen(true); }}
               onDelete={(u) => setDeleting(u)}
             />

@@ -58,3 +58,19 @@ export async function isAdmin(user: DecodedIdToken): Promise<boolean> {
   const record = await db.collection("users").findOne({ email });
   return record?.role === "admin";
 }
+
+// Resultado do guard de rota — sem acoplar ao Next; a rota traduz em HTTP.
+export type AuthResult =
+  | { ok: true; user: DecodedIdToken }
+  | { ok: false; status: 401 | 403; error: string };
+
+/**
+ * Guard de rota: exige usuário autenticado E admin.
+ * Centraliza a trava usada por todas as rotas de escrita/leitura sensível.
+ */
+export async function requireAdmin(req: Request): Promise<AuthResult> {
+  const user = await verifyRequest(req);
+  if (!user) return { ok: false, status: 401, error: "Não autenticado" };
+  if (!(await isAdmin(user))) return { ok: false, status: 403, error: "Sem permissão" };
+  return { ok: true, user };
+}

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
-import { verifyRequest, isAdmin } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { pusherServer } from "@/lib/pusher";
 import { validateCreateUser } from "@/lib/validate";
 import { rateLimit } from "@/lib/rateLimit";
@@ -25,9 +25,10 @@ export async function GET(req: Request) {
     );
   }
 
-  const user = await verifyRequest(req);
-  if (!user) {
-    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  // Listagem expõe e-mails de todos — restrita a admin.
+  const authz = await requireAdmin(req);
+  if (!authz.ok) {
+    return NextResponse.json({ error: authz.error }, { status: authz.status });
   }
 
   const url = new URL(req.url);
@@ -65,9 +66,10 @@ export async function POST(req: Request) {
     );
   }
 
-  const user = await verifyRequest(req);
-  if (!user) {
-    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  // Criação de usuários é ação administrativa.
+  const authz = await requireAdmin(req);
+  if (!authz.ok) {
+    return NextResponse.json({ error: authz.error }, { status: authz.status });
   }
 
   const body = await req.json().catch(() => null);
@@ -76,9 +78,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: validation.error }, { status: 400 });
   }
 
-  // TRAVA DE PAPEL — fonte da verdade é o servidor.
-  const callerIsAdmin = await isAdmin(user);
-  const role = validation.data.role === "admin" && callerIsAdmin ? "admin" : "user";
+  // Caller já é admin (requireAdmin), então pode definir admin ou user.
+  const role = validation.data.role;
 
   const now = new Date().toISOString();
   const newUser = {

@@ -12,6 +12,8 @@ interface Props {
   hasSearch: boolean;
   /** UX apenas: esconde a lixeira para não-admin. A segurança real é no servidor. */
   canDelete: boolean;
+  /** UX: esconde o lápis para não-admin. A segurança real é no servidor. */
+  canEdit: boolean;
   onEdit: (user: AppUser) => void;
   onDelete: (user: AppUser) => void;
 }
@@ -42,6 +44,7 @@ export function UserTable({
   loading,
   hasSearch,
   canDelete,
+  canEdit,
   onEdit,
   onDelete,
 }: Props) {
@@ -100,9 +103,11 @@ export function UserTable({
                   <td className="px-4 py-3 text-text-muted">{formatDate(u.createdAt)}</td>
                   <td className="py-3 pl-4 pr-5">
                     <div className="flex items-center justify-end gap-1 opacity-60 transition-opacity group-hover:opacity-100">
-                      <button onClick={() => onEdit(u)} className="grid size-8 place-items-center rounded-lg text-text-muted hover:bg-accent-soft hover:text-accent" aria-label={`Editar ${u.name}`} title="Editar">
-                        <PencilGlyph className="size-[17px]" />
-                      </button>
+                      {canEdit && (
+                        <button onClick={() => onEdit(u)} className="grid size-8 place-items-center rounded-lg text-text-muted hover:bg-accent-soft hover:text-accent" aria-label={`Editar ${u.name}`} title="Editar">
+                          <PencilGlyph className="size-[17px]" />
+                        </button>
+                      )}
                       {canDelete && (
                         <button onClick={() => onDelete(u)} className="grid size-8 place-items-center rounded-lg text-text-muted hover:bg-danger-soft hover:text-danger" aria-label={`Excluir ${u.name}`} title="Excluir">
                           <TrashGlyph className="size-[17px]" />

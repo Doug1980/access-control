@@ -1,9 +1,8 @@
 import { test, expect, vi, beforeEach } from "vitest";
 
-// --- Mocks das fronteiras de I/O (a lógica das rotas continua real) ---
+// Mocks das fronteiras de I/O (a lógica das rotas continua real).
 vi.mock("@/lib/auth", () => ({
-  verifyRequest: vi.fn(),
-  isAdmin: vi.fn(),
+  requireAdmin: vi.fn(),
   isRootAdmin: vi.fn(),
   resolveEmail: vi.fn(),
 }));
@@ -13,16 +12,14 @@ vi.mock("@/lib/rateLimit", () => ({ rateLimit: vi.fn() }));
 vi.mock("@/lib/validate", () => ({ validateUpdateUser: vi.fn() }));
 
 import { DELETE, PATCH } from "./route";
-import { verifyRequest, isAdmin, isRootAdmin, resolveEmail } from "@/lib/auth";
+import { requireAdmin, isRootAdmin, resolveEmail } from "@/lib/auth";
 import { getDb } from "@/lib/mongodb";
 import { pusherServer } from "@/lib/pusher";
 import { rateLimit } from "@/lib/rateLimit";
 import { validateUpdateUser } from "@/lib/validate";
 
-// ObjectId válido (24 hex) — senão a rota devolve 400 "ID inválido".
 const VALID_ID = "507f1f77bcf86cd799439011";
 
-// "Banco" falso com as operações que as rotas usam.
 function fakeDb(opts: {
   target: { _id?: string; email: string; role: string } | null;
   adminCount?: number;
@@ -47,12 +44,13 @@ const reqJson = (body: unknown) =>
   });
 const params = { params: Promise.resolve({ id: VALID_ID }) };
 
-// Estado base "feliz" (admin autenticado); cada teste sobrescreve o que importa.
+const ADMIN_OK = { ok: true, user: { uid: "u1", email: "admin@empresa.com" } };
+const DENY_403 = { ok: false, status: 403, error: "Sem permissão" };
+
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(rateLimit).mockReturnValue({ ok: true } as never);
-  vi.mocked(verifyRequest).mockResolvedValue({ uid: "u1", email: "admin@empresa.com" } as never);
-  vi.mocked(isAdmin).mockResolvedValue(true);
+  vi.mocked(requireAdmin).mockResolvedValue(ADMIN_OK as never);
   vi.mocked(isRootAdmin).mockReturnValue(false);
   vi.mocked(resolveEmail).mockReturnValue("admin@empresa.com");
   vi.mocked(validateUpdateUser).mockReturnValue({ ok: true, data: {} } as never);
@@ -62,7 +60,7 @@ beforeEach(() => {
 // =========================== DELETE ===========================
 
 test("DELETE: não-admin recebe 403 sem tocar no banco", async () => {
-  vi.mocked(isAdmin).mockResolvedValue(false);
+  vi.mocked(requireAdmin).mockResolvedValue(DENY_403 as never);
   const res = await DELETE(req(), params);
   expect(res.status).toBe(403);
   expect((await res.json()).error).toBe("Sem permissão");
@@ -90,32 +88,19 @@ test("DELETE: admin deleta usuário comum (200, deleteOne + Pusher)", async () =
 
 // =========================== PATCH ============================
 
-test("PATCH: não-admin não altera role (preserva o atual)", async () => {
-  vi.mocked(isAdmin).mockResolvedValue(false);
-  vi.mocked(validateUpdateUser).mockReturnValue({ ok: true, data: { role: "admin" } } as never);
-
-  const { db, col } = fakeDb({ target: { _id: VALID_ID, email: "x@e.com", role: "user" } });
-  vi.mocked(getDb).mockResolvedValue(db as never);
-
+test("PATCH: não-admin recebe 403 sem tocar no banco", async () => {
+  vi.mocked(requireAdmin).mockResolvedValue(DENY_403 as never);
   const res = await PATCH(reqJson({ role: "admin" }), params);
-
-  expect(res.status).toBe(200);
-  // Gravou o role ATUAL ("user"), não o solicitado ("admin").
-  expect(col.findOneAndUpdate).toHaveBeenCalledWith(
-    expect.anything(),
-    { $set: expect.objectContaining({ role: "user" }) },
-    expect.anything(),
-  );
+  expect(res.status).toBe(403);
+  expect((await res.json()).error).toBe("Sem permissão");
+  expect(getDb).not.toHaveBeenCalled();
 });
 
 test("PATCH: admin promove usuário para admin", async () => {
   vi.mocked(validateUpdateUser).mockReturnValue({ ok: true, data: { role: "admin" } } as never);
-
   const { db, col } = fakeDb({ target: { _id: VALID_ID, email: "x@e.com", role: "user" } });
   vi.mocked(getDb).mockResolvedValue(db as never);
-
   const res = await PATCH(reqJson({ role: "admin" }), params);
-
   expect(res.status).toBe(200);
   expect(col.findOneAndUpdate).toHaveBeenCalledWith(
     expect.anything(),
@@ -127,12 +112,9 @@ test("PATCH: admin promove usuário para admin", async () => {
 test("PATCH: admin NÃO consegue rebaixar um admin raiz (preserva admin)", async () => {
   vi.mocked(validateUpdateUser).mockReturnValue({ ok: true, data: { role: "user" } } as never);
   vi.mocked(isRootAdmin).mockReturnValue(true); // o ALVO é root admin
-
   const { db, col } = fakeDb({ target: { _id: VALID_ID, email: "root@empresa.com", role: "admin" } });
   vi.mocked(getDb).mockResolvedValue(db as never);
-
   const res = await PATCH(reqJson({ role: "user" }), params);
-
   expect(res.status).toBe(200);
   expect(col.findOneAndUpdate).toHaveBeenCalledWith(
     expect.anything(),
@@ -143,13 +125,9 @@ test("PATCH: admin NÃO consegue rebaixar um admin raiz (preserva admin)", async
 
 test("PATCH: sem role no payload, não mexe no role", async () => {
   vi.mocked(validateUpdateUser).mockReturnValue({ ok: true, data: { name: "Novo Nome" } } as never);
-
   const { db, col } = fakeDb({ target: { _id: VALID_ID, email: "x@e.com", role: "user" } });
   vi.mocked(getDb).mockResolvedValue(db as never);
-
   await PATCH(reqJson({ name: "Novo Nome" }), params);
-
-  // Inspeciona os argumentos da chamada: o $set não deve conter "role".
   const update = vi.mocked(col.findOneAndUpdate).mock.calls[0][1] as { $set: Record<string, unknown> };
   expect(update.$set).not.toHaveProperty("role");
   expect(update.$set).toHaveProperty("name", "Novo Nome");
