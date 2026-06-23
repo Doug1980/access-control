@@ -1,22 +1,18 @@
 import { test, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@/lib/auth", () => ({ requireAdmin: vi.fn() }));
+vi.mock("@/lib/auth", () => ({ verifyRequest: vi.fn(), isAdmin: vi.fn() }));
 vi.mock("@/lib/mongodb", () => ({ getDb: vi.fn() }));
 vi.mock("@/lib/pusher", () => ({ pusherServer: { trigger: vi.fn() } }));
 vi.mock("@/lib/rateLimit", () => ({ rateLimit: vi.fn() }));
 vi.mock("@/lib/validate", () => ({ validateCreateUser: vi.fn() }));
 
 import { GET, POST } from "./route";
-import { requireAdmin } from "@/lib/auth";
+import { verifyRequest, isAdmin } from "@/lib/auth";
 import { getDb } from "@/lib/mongodb";
 import { pusherServer } from "@/lib/pusher";
 import { rateLimit } from "@/lib/rateLimit";
 import { validateCreateUser } from "@/lib/validate";
 
-const ADMIN_OK = { ok: true, user: { uid: "u1", email: "admin@empresa.com" } };
-const DENY_403 = { ok: false, status: 403, error: "Sem permissão" };
-
-// Banco falso para a listagem (cursor encadeável) e para a criação.
 function fakeListDb(docs: Array<Record<string, unknown>>) {
   const cursor: Record<string, unknown> = {
     sort: () => cursor,
@@ -46,7 +42,8 @@ const reqPost = (body: unknown = {}) =>
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(rateLimit).mockReturnValue({ ok: true } as never);
-  vi.mocked(requireAdmin).mockResolvedValue(ADMIN_OK as never);
+  vi.mocked(verifyRequest).mockResolvedValue({ uid: "u1", email: "user@empresa.com" } as never);
+  vi.mocked(isAdmin).mockResolvedValue(false); // por padrão, não-admin
   vi.mocked(validateCreateUser).mockReturnValue({
     ok: true,
     data: { name: "Novo", email: "novo@empresa.com", role: "user" },
@@ -54,15 +51,13 @@ beforeEach(() => {
   vi.mocked(pusherServer.trigger).mockResolvedValue(undefined as never);
 });
 
-test("GET: não-admin recebe 403 sem tocar no banco", async () => {
-  vi.mocked(requireAdmin).mockResolvedValue(DENY_403 as never);
+test("GET: sem autenticação retorna 401", async () => {
+  vi.mocked(verifyRequest).mockResolvedValue(null as never);
   const res = await GET(reqGet());
-  expect(res.status).toBe(403);
-  expect((await res.json()).error).toBe("Sem permissão");
-  expect(getDb).not.toHaveBeenCalled();
+  expect(res.status).toBe(401);
 });
 
-test("GET: admin recebe a lista paginada", async () => {
+test("GET: autenticado recebe a lista paginada", async () => {
   const { db } = fakeListDb([
     { _id: { toString: () => "1" }, name: "A", email: "a@e.com", role: "user", createdAt: "", updatedAt: "" },
   ]);
@@ -74,23 +69,35 @@ test("GET: admin recebe a lista paginada", async () => {
   expect(body.pagination.total).toBe(1);
 });
 
-test("POST: não-admin recebe 403 sem tocar no banco", async () => {
-  vi.mocked(requireAdmin).mockResolvedValue(DENY_403 as never);
+test("POST: sem autenticação retorna 401", async () => {
+  vi.mocked(verifyRequest).mockResolvedValue(null as never);
   const res = await POST(reqPost());
-  expect(res.status).toBe(403);
-  expect((await res.json()).error).toBe("Sem permissão");
-  expect(getDb).not.toHaveBeenCalled();
+  expect(res.status).toBe(401);
 });
 
-test("POST: admin cria usuário (201 + Pusher)", async () => {
-  const { db, col } = fakeWriteDb({ existing: null });
+test("POST: não-admin pedindo role admin é forçado para user", async () => {
+  vi.mocked(validateCreateUser).mockReturnValue({
+    ok: true,
+    data: { name: "X", email: "x@e.com", role: "admin" },
+  } as never);
+  const { db } = fakeWriteDb({ existing: null });
   vi.mocked(getDb).mockResolvedValue(db as never);
-  const res = await POST(reqPost());
+  const res = await POST(reqPost({ role: "admin" }));
   expect(res.status).toBe(201);
-  const body = await res.json();
-  expect(body.role).toBe("user");
-  expect(col.insertOne).toHaveBeenCalledTimes(1);
-  expect(pusherServer.trigger).toHaveBeenCalledWith("users", "user:created", expect.anything());
+  expect((await res.json()).role).toBe("user"); // trava de papel no servidor
+});
+
+test("POST: admin consegue criar admin", async () => {
+  vi.mocked(isAdmin).mockResolvedValue(true);
+  vi.mocked(validateCreateUser).mockReturnValue({
+    ok: true,
+    data: { name: "X", email: "x@e.com", role: "admin" },
+  } as never);
+  const { db } = fakeWriteDb({ existing: null });
+  vi.mocked(getDb).mockResolvedValue(db as never);
+  const res = await POST(reqPost({ role: "admin" }));
+  expect(res.status).toBe(201);
+  expect((await res.json()).role).toBe("admin");
 });
 
 test("POST: e-mail duplicado retorna 409", async () => {

@@ -158,15 +158,13 @@ export default function UsersPage() {
                 className="input pl-9"
               />
             </div>
-            {isAdmin && (
-              <button
-                onClick={() => { setEditing(null); setFormOpen(true); }}
-                className="btn-primary"
-              >
-                <PlusIcon className="size-[18px]" />
-                Novo usuario
-              </button>
-            )}
+            <button
+              onClick={() => { setEditing(null); setFormOpen(true); }}
+              className="btn-primary"
+            >
+              <PlusIcon className="size-[18px]" />
+              Novo usuario
+            </button>
           </div>
 
           <div className="mt-4">
