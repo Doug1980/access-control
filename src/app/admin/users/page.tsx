@@ -172,8 +172,7 @@ export default function UsersPage() {
               users={filtered}
               loading={fetching}
               hasSearch={search.trim().length > 0}
-              canDelete={isAdmin}
-              canEdit={isAdmin}
+              isAdmin={isAdmin}
               onEdit={(u) => { setEditing(u); setFormOpen(true); }}
               onDelete={(u) => setDeleting(u)}
             />

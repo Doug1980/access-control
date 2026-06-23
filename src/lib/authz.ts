@@ -1,9 +1,13 @@
 /**
  * Regras puras de autorização para deleção de usuário.
  *
- * Sem I/O: recebe o contexto já resolvido (quem chama, alvo, contagem de admins)
- * e devolve a decisão. Mantém EXATAMENTE os mesmos status/mensagens da rota
- * DELETE, servindo como fonte única de verdade — fácil de testar e de auditar.
+ * Modelo de permissão:
+ *  - Admin remove qualquer um (respeitando proteção do último admin e do root).
+ *  - Usuário comum ('user') remove apenas contas de papel 'user' (inclusive a própria),
+ *    nunca admins.
+ *
+ * Sem I/O: recebe o contexto já resolvido e devolve a decisão, com os mesmos
+ * status/mensagens da rota DELETE — fonte única de verdade, fácil de testar.
  */
 
 export interface DeletionTarget {
@@ -12,15 +16,15 @@ export interface DeletionTarget {
 }
 
 export interface DeletionContext {
-  /** O autor da requisição é admin (raiz via env ou promovido no banco)? */
+  /** O autor é admin (raiz via env ou promovido no banco)? */
   callerIsAdmin: boolean;
-  /** O autor é admin raiz (definido por env)? Raiz não pode se autodeletar. */
+  /** O autor é admin raiz (env)? Raiz não pode se autodeletar. */
   callerIsRootAdmin: boolean;
   /** E-mail confiável do autor, resolvido no servidor (ou null). */
   callerEmail: string | null;
-  /** Usuário alvo da deleção, ou null se não existe no banco. */
+  /** Usuário alvo da deleção, ou null se não existe. */
   target: DeletionTarget | null;
-  /** Quantidade atual de admins no sistema (para proteger o último). */
+  /** Quantidade atual de admins (para proteger o último). */
   adminCount: number;
 }
 
@@ -29,14 +33,14 @@ export type DeletionDecision =
   | { ok: false; status: number; error: string };
 
 export function evaluateUserDeletion(ctx: DeletionContext): DeletionDecision {
-  // 1. Apenas admin pode deletar (checado antes de qualquer acesso ao banco).
-  if (!ctx.callerIsAdmin) {
-    return { ok: false, status: 403, error: "Sem permissão" };
-  }
-
-  // 2. O alvo precisa existir.
+  // 1. O alvo precisa existir.
   if (!ctx.target) {
     return { ok: false, status: 404, error: "Usuário não encontrado" };
+  }
+
+  // 2. Autorização por papel: não-admin só remove contas 'user'.
+  if (!ctx.callerIsAdmin && ctx.target.role !== "user") {
+    return { ok: false, status: 403, error: "Sem permissão" };
   }
 
   // 3. Não remover o último admin — o sistema ficaria sem gestão.

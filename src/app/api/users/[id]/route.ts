@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
-import { requireAdmin, isRootAdmin, resolveEmail } from "@/lib/auth";
+import { verifyRequest, isAdmin, isRootAdmin, resolveEmail } from "@/lib/auth";
 import { evaluateUserDeletion } from "@/lib/authz";
 import { pusherServer } from "@/lib/pusher";
 import { validateUpdateUser } from "@/lib/validate";
@@ -30,10 +30,9 @@ export async function PATCH(
     );
   }
 
-  // Edição de usuários é ação administrativa.
-  const authz = await requireAdmin(req);
-  if (!authz.ok) {
-    return NextResponse.json({ error: authz.error }, { status: authz.status });
+  const user = await verifyRequest(req);
+  if (!user) {
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
   }
 
   const { id } = await params;
@@ -48,7 +47,6 @@ export async function PATCH(
   }
 
   const db = await getDb();
-
   const target = await db
     .collection("users")
     .findOne({ _id: new ObjectId(id) }, { projection: USER_PROJECTION });
@@ -56,18 +54,25 @@ export async function PATCH(
     return NextResponse.json({ error: "Usuário não encontrado" }, { status: 404 });
   }
 
+  const callerIsAdmin = await isAdmin(user);
+
+  // Autorização: admin edita qualquer um; 'user' só edita contas 'user'.
+  if (!callerIsAdmin && target.role !== "user") {
+    return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
+  }
+
   // Allowlist explícita — apenas campos validados chegam ao banco.
   const safeUpdate: Record<string, string> = {};
   if (validation.data.name)  safeUpdate.name  = validation.data.name;
   if (validation.data.email) safeUpdate.email = validation.data.email;
 
-  if (validation.data.role !== undefined) {
-    // Admin não pode rebaixar um admin raiz pela UI.
+  // Mudança de papel é exclusiva de admin (não-admin: role enviado é ignorado).
+  if (validation.data.role !== undefined && callerIsAdmin) {
     if (
       validation.data.role !== "admin" &&
       isRootAdmin({ email: target.email } as never)
     ) {
-      safeUpdate.role = target.role;
+      safeUpdate.role = target.role; // admin comum não rebaixa o root
     } else {
       safeUpdate.role = validation.data.role;
     }
@@ -101,11 +106,10 @@ export async function DELETE(
     );
   }
 
-  const authz = await requireAdmin(req);
-  if (!authz.ok) {
-    return NextResponse.json({ error: authz.error }, { status: authz.status });
+  const user = await verifyRequest(req);
+  if (!user) {
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
   }
-  const user = authz.user;
 
   const { id } = await params;
   if (!ObjectId.isValid(id)) {
@@ -114,10 +118,12 @@ export async function DELETE(
 
   const db = await getDb();
 
-  // Projeção inclui `role` — necessário para a regra do "último admin".
+  // Projeção inclui `role` — necessário para a autorização e a regra do "último admin".
   const target = await db
     .collection("users")
     .findOne({ _id: new ObjectId(id) }, { projection: { email: 1, role: 1 } });
+
+  const callerIsAdmin = await isAdmin(user);
 
   const adminCount =
     (target?.role as string | undefined) === "admin"
@@ -126,7 +132,7 @@ export async function DELETE(
 
   // Decisão de autorização centralizada e testada em src/lib/authz.ts.
   const decision = evaluateUserDeletion({
-    callerIsAdmin: true,
+    callerIsAdmin,
     callerIsRootAdmin: isRootAdmin(user),
     callerEmail: resolveEmail(user),
     target: target
