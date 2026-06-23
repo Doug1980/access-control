@@ -1,6 +1,11 @@
 import { auth } from "@/lib/firebase/client";
 import type { AppUser, CreateUserInput, UpdateUserInput } from "@/types/user";
 
+export interface PaginatedUsers {
+  data: AppUser[];
+  pagination: { page: number; limit: number; total: number; pages: number };
+}
+
 async function authFetch(input: string, init: RequestInit = {}) {
   const token = auth.currentUser ? await auth.currentUser.getIdToken() : null;
   const res = await fetch(input, {
@@ -21,7 +26,8 @@ async function authFetch(input: string, init: RequestInit = {}) {
 }
 
 export const usersApi = {
-  list: (): Promise<AppUser[]> => authFetch("/api/users"),
+  list: (page = 1, limit = 50): Promise<PaginatedUsers> =>
+    authFetch(`/api/users?page=${page}&limit=${limit}`),
   create: (data: CreateUserInput): Promise<AppUser> =>
     authFetch("/api/users", { method: "POST", body: JSON.stringify(data) }),
   update: (id: string, data: UpdateUserInput): Promise<AppUser> =>

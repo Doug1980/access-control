@@ -53,7 +53,8 @@ export default function AdminPage() {
   const load = useCallback(async () => {
     setFetching(true);
     try {
-      setUsers(await usersApi.list());
+      const res = await usersApi.list();
+      setUsers(res.data);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Falha ao carregar usuários.");
     } finally {
@@ -250,4 +251,6 @@ export default function AdminPage() {
       />
     </div>
   );
+}
+
 }

@@ -2,51 +2,88 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { verifyRequest, isAdmin } from "@/lib/auth";
 import { pusherServer } from "@/lib/pusher";
-import type { CreateUserInput } from "@/types/user";
+import { validateCreateUser } from "@/lib/validate";
+import { rateLimit } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
+const USER_PROJECTION = {
+  _id: 1,
+  name: 1,
+  email: 1,
+  role: 1,
+  createdAt: 1,
+  updatedAt: 1,
+} as const;
+
 export async function GET(req: Request) {
-  const user = await verifyRequest(req);
-  if (!user) {
-    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-  }
-
-  const db = await getDb();
-  const docs = await db
-    .collection("users")
-    .find({})
-    .sort({ createdAt: -1 })
-    .toArray();
-
-  const users = docs.map((d) => ({ ...d, _id: d._id.toString() }));
-  return NextResponse.json(users);
-}
-
-export async function POST(req: Request) {
-  const user = await verifyRequest(req);
-  if (!user) {
-    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-  }
-
-  const body = (await req.json()) as CreateUserInput;
-
-  if (!body?.name?.trim() || !body?.email?.trim()) {
+  const rl = rateLimit(req, { limit: 60, windowMs: 60_000 });
+  if (!rl.ok) {
     return NextResponse.json(
-      { error: "Nome e e-mail são obrigatórios" },
-      { status: 400 },
+      { error: "Muitas requisições. Tente novamente em instantes." },
+      { status: 429, headers: { "Retry-After": "60" } },
     );
   }
 
+  const user = await verifyRequest(req);
+  if (!user) {
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  }
+
+  const url = new URL(req.url);
+  const page  = Math.max(1, parseInt(url.searchParams.get("page")  ?? "1", 10));
+  const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get("limit") ?? "50", 10)));
+  const skip  = (page - 1) * limit;
+
+  const db = await getDb();
+  const collection = db.collection("users");
+
+  const [docs, total] = await Promise.all([
+    collection
+      .find({}, { projection: USER_PROJECTION })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray(),
+    collection.countDocuments(),
+  ]);
+
+  const users = docs.map((d) => ({ ...d, _id: d._id.toString() }));
+
+  return NextResponse.json({
+    data: users,
+    pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+  });
+}
+
+export async function POST(req: Request) {
+  const rl = rateLimit(req, { limit: 20, windowMs: 60_000 });
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: "Muitas requisições. Tente novamente em instantes." },
+      { status: 429, headers: { "Retry-After": "60" } },
+    );
+  }
+
+  const user = await verifyRequest(req);
+  if (!user) {
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  }
+
+  const body = await req.json().catch(() => null);
+  const validation = validateCreateUser(body);
+  if (!validation.ok) {
+    return NextResponse.json({ error: validation.error }, { status: 400 });
+  }
+
   // TRAVA DE PAPEL — fonte da verdade é o servidor.
-  const callerIsAdmin = await isAdmin(user); // <- await
-  const role: CreateUserInput["role"] =
-    body.role === "admin" && callerIsAdmin ? "admin" : "user";
+  const callerIsAdmin = await isAdmin(user);
+  const role = validation.data.role === "admin" && callerIsAdmin ? "admin" : "user";
 
   const now = new Date().toISOString();
   const newUser = {
-    name: body.name.trim(),
-    email: body.email.trim().toLowerCase(),
+    name:      validation.data.name,
+    email:     validation.data.email,
     role,
     createdAt: now,
     updatedAt: now,

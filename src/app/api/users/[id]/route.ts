@@ -3,14 +3,32 @@ import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { verifyRequest, isAdmin, isRootAdmin } from "@/lib/auth";
 import { pusherServer } from "@/lib/pusher";
-import type { UpdateUserInput } from "@/types/user";
+import { validateUpdateUser } from "@/lib/validate";
+import { rateLimit } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
+
+const USER_PROJECTION = {
+  _id: 1,
+  name: 1,
+  email: 1,
+  role: 1,
+  createdAt: 1,
+  updatedAt: 1,
+} as const;
 
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const rl = rateLimit(req, { limit: 30, windowMs: 60_000 });
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: "Muitas requisições. Tente novamente em instantes." },
+      { status: 429, headers: { "Retry-After": "60" } },
+    );
+  }
+
   const user = await verifyRequest(req);
   if (!user) {
     return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
@@ -21,48 +39,51 @@ export async function PATCH(
     return NextResponse.json({ error: "ID inválido" }, { status: 400 });
   }
 
-  const body = (await req.json()) as UpdateUserInput;
-  const callerIsAdmin = await isAdmin(user);
-
-  const db = await getDb();
-
-  // Alvo da edição (precisamos saber o estado atual dele).
-  const target = await db
-    .collection("users")
-    .findOne({ _id: new ObjectId(id) });
-  if (!target) {
-    return NextResponse.json(
-      { error: "Usuário não encontrado" },
-      { status: 404 },
-    );
+  const body = await req.json().catch(() => null);
+  const validation = validateUpdateUser(body);
+  if (!validation.ok) {
+    return NextResponse.json({ error: validation.error }, { status: 400 });
   }
 
-  const safeBody = { ...body };
+  const callerIsAdmin = await isAdmin(user);
+  const db = await getDb();
 
-  // Trava de papel:
-  if (!callerIsAdmin) {
-    // Não-admin nunca altera role: preserva o atual (não promove nem rebaixa).
-    safeBody.role = target.role;
-  } else if (
-    body.role &&
-    body.role !== "admin" &&
-    isRootAdmin({ email: target.email } as never)
-  ) {
-    // Admin comum não pode rebaixar um admin RAIZ (definido no .env).
-    safeBody.role = target.role;
+  const target = await db
+    .collection("users")
+    .findOne({ _id: new ObjectId(id) }, { projection: USER_PROJECTION });
+  if (!target) {
+    return NextResponse.json({ error: "Usuário não encontrado" }, { status: 404 });
+  }
+
+  // Allowlist explícita — apenas campos validados chegam ao banco.
+  const safeUpdate: Record<string, string> = {};
+  if (validation.data.name)  safeUpdate.name  = validation.data.name;
+  if (validation.data.email) safeUpdate.email = validation.data.email;
+
+  // Trava de papel para role:
+  if (validation.data.role !== undefined) {
+    if (!callerIsAdmin) {
+      // Não-admin: preserva role atual, nunca promove nem rebaixa.
+      safeUpdate.role = target.role;
+    } else if (
+      validation.data.role !== "admin" &&
+      isRootAdmin({ email: target.email } as never)
+    ) {
+      // Admin comum não pode rebaixar o root admin.
+      safeUpdate.role = target.role;
+    } else {
+      safeUpdate.role = validation.data.role;
+    }
   }
 
   const updated = await db.collection("users").findOneAndUpdate(
     { _id: new ObjectId(id) },
-    { $set: { ...safeBody, updatedAt: new Date().toISOString() } },
-    { returnDocument: "after" },
+    { $set: { ...safeUpdate, updatedAt: new Date().toISOString() } },
+    { returnDocument: "after", projection: USER_PROJECTION },
   );
 
   if (!updated) {
-    return NextResponse.json(
-      { error: "Usuário não encontrado" },
-      { status: 404 },
-    );
+    return NextResponse.json({ error: "Usuário não encontrado" }, { status: 404 });
   }
 
   const result = { ...updated, _id: updated._id.toString() };
@@ -75,6 +96,14 @@ export async function DELETE(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const rl = rateLimit(req, { limit: 10, windowMs: 60_000 });
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: "Muitas requisições. Tente novamente em instantes." },
+      { status: 429, headers: { "Retry-After": "60" } },
+    );
+  }
+
   const user = await verifyRequest(req);
   if (!user) {
     return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
@@ -89,14 +118,30 @@ export async function DELETE(
   }
 
   const db = await getDb();
+
+  // Busca o alvo antes de deletar para proteger o root admin.
+  const target = await db
+    .collection("users")
+    .findOne({ _id: new ObjectId(id) }, { projection: { email: 1 } });
+
+  if (!target) {
+    return NextResponse.json({ error: "Usuário não encontrado" }, { status: 404 });
+  }
+
+  // Impede deleção do root admin (definido no .env ADMIN_EMAILS).
+  if (isRootAdmin({ email: target.email } as never)) {
+    return NextResponse.json(
+      { error: "Não é possível remover o administrador raiz" },
+      { status: 403 },
+    );
+  }
+
   const { deletedCount } = await db
     .collection("users")
     .deleteOne({ _id: new ObjectId(id) });
+
   if (deletedCount === 0) {
-    return NextResponse.json(
-      { error: "Usuário não encontrado" },
-      { status: 404 },
-    );
+    return NextResponse.json({ error: "Usuário não encontrado" }, { status: 404 });
   }
 
   await pusherServer.trigger("users", "user:deleted", { id }).catch(() => {});
