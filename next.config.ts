@@ -61,6 +61,9 @@ const nextConfig: NextConfig = {
     ];
   },
 
+  // Silencia o aviso do Next.js 16 sobre webpack config sem turbopack config.
+  turbopack: {},
+
   webpack: (config) => {
     // Garante que o Webpack resolva os módulos ESM (jose) corretamente
     // em vez de deixar o Node fazer require() deles.
