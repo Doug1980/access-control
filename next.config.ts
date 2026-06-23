@@ -21,8 +21,9 @@ const securityHeaders = [
     key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
-      // Scripts: próprio domínio + 'unsafe-inline' exigido pelo Next.js (inline scripts de hidratação).
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      // Scripts: próprio domínio + 'unsafe-inline' exigido pelo Next.js (inline scripts de hidratação)
+      // + apis.google.com, exigido pelo fluxo de signInWithPopup do Firebase Auth (carrega api.js).
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.google.com",
       // Estilos: próprio domínio + inline (Tailwind/CSS-in-JS).
       "style-src 'self' 'unsafe-inline'",
       // Imagens: próprio domínio + data URIs (favicons, avatars base64).
@@ -40,8 +41,9 @@ const securityHeaders = [
         "https://api-us2.pusher.com",
         "wss://*.pusher.com",
       ].join(" "),
-      // Frames: nenhum (reforça X-Frame-Options: DENY).
-      "frame-src 'none'",
+      // Frames: apenas os necessários ao popup de auth do Firebase (iframe de relay no authDomain
+      // + telas de consentimento do Google). Sem isso, signInWithPopup falha antes de abrir o popup.
+      "frame-src 'self' https://*.firebaseapp.com https://accounts.google.com https://apis.google.com",
       // Objetos (Flash, etc.): nenhum.
       "object-src 'none'",
       // Força HTTPS para todos os recursos carregados.
