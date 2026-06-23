@@ -19,20 +19,42 @@ export async function verifyRequest(
   }
 }
 
+/**
+ * Resolve o e-mail do token de forma segura.
+ *
+ * O GitHub permite que usuários mantenham o e-mail privado. Nesses casos,
+ * o Firebase preenche `user.email` como null, mas ainda disponibiliza o
+ * e-mail em `firebase.identities["email"][0]`.
+ * Verificamos ambos para não bloquear logins legítimos.
+ */
+function resolveEmail(user: DecodedIdToken): string | null {
+  if (user.email) return user.email.toLowerCase();
+
+  // Fallback: provedores OAuth (GitHub, etc.) que ocultam o email principal
+  const identities = (user.firebase as Record<string, unknown>)
+    ?.identities as Record<string, unknown[]> | undefined;
+  const emails = identities?.["email"];
+  if (Array.isArray(emails) && emails.length > 0) {
+    return String(emails[0]).toLowerCase();
+  }
+
+  return null;
+}
+
 // Admins "raiz" — definidos por infra no .env. Nunca podem ser rebaixados pela UI.
 export function isRootAdmin(user: DecodedIdToken): boolean {
-  return !!user.email && adminEmails.includes(user.email.toLowerCase());
+  const email = resolveEmail(user);
+  return !!email && adminEmails.includes(email);
 }
 
 // Admin efetivo = raiz (env) OU promovido (role "admin" no banco, casado por e-mail).
 export async function isAdmin(user: DecodedIdToken): Promise<boolean> {
   if (isRootAdmin(user)) return true;
-  if (!user.email) return false;
+
+  const email = resolveEmail(user);
+  if (!email) return false;
 
   const db = await getDb();
-  const record = await db
-    .collection("users")
-    .findOne({ email: user.email.toLowerCase() });
-
+  const record = await db.collection("users").findOne({ email });
   return record?.role === "admin";
 }
