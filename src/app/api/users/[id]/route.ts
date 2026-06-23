@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
-import { verifyRequest, isAdmin, isRootAdmin } from "@/lib/auth";
+import { verifyRequest, isAdmin, isRootAdmin, resolveEmail } from "@/lib/auth";
 import { pusherServer } from "@/lib/pusher";
 import { validateUpdateUser } from "@/lib/validate";
 import { rateLimit } from "@/lib/rateLimit";
@@ -128,10 +128,28 @@ export async function DELETE(
     return NextResponse.json({ error: "Usuário não encontrado" }, { status: 404 });
   }
 
-  // Impede deleção do root admin (definido no .env ADMIN_EMAILS).
-  if (isRootAdmin({ email: target.email } as never)) {
+  // Impede remoção do último admin — sistema ficaria sem gestão.
+  if ((target.role as string) === "admin") {
+    const adminCount = await db.collection("users").countDocuments({ role: "admin" });
+    if (adminCount <= 1) {
+      return NextResponse.json(
+        { error: "Não é possível remover o único administrador do sistema." },
+        { status: 403 },
+      );
+    }
+  }
+
+  // Impede autodeleção — o root admin não pode remover a si mesmo.
+  const callerEmail = resolveEmail(user);
+  const targetEmail = (target.email as string | undefined)?.toLowerCase();
+  if (
+    callerEmail &&
+    targetEmail &&
+    callerEmail === targetEmail &&
+    isRootAdmin(user)
+  ) {
     return NextResponse.json(
-      { error: "Não é possível remover o administrador raiz" },
+      { error: "Você não pode remover sua própria conta de administrador raiz." },
       { status: 403 },
     );
   }

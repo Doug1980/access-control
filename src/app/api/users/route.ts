@@ -90,6 +90,16 @@ export async function POST(req: Request) {
   };
 
   const db = await getDb();
+
+  // Bloqueia e-mail duplicado
+  const existing = await db.collection("users").findOne({ email: validation.data.email });
+  if (existing) {
+    return NextResponse.json(
+      { error: "Já existe um usuário com este e-mail." },
+      { status: 409 },
+    );
+  }
+
   const { insertedId } = await db.collection("users").insertOne(newUser);
   const result = { ...newUser, _id: insertedId.toString() };
 

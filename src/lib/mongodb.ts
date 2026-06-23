@@ -19,7 +19,20 @@ if (process.env.NODE_ENV === "development") {
   clientPromise = new MongoClient(uri).connect();
 }
 
+let dbInstance: Db | null = null;
+
 export async function getDb(): Promise<Db> {
   const client = await clientPromise;
-  return client.db(process.env.MONGODB_DB);
+  const db = client.db(process.env.MONGODB_DB);
+
+  // Garante índice único no email — idempotente, roda apenas uma vez por conexão
+  if (!dbInstance) {
+    dbInstance = db;
+    await db
+      .collection("users")
+      .createIndex({ email: 1 }, { unique: true, background: true })
+      .catch(() => {}); // ignora se já existir
+  }
+
+  return db;
 }

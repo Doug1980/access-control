@@ -27,7 +27,7 @@ export async function verifyRequest(
  * e-mail em `firebase.identities["email"][0]`.
  * Verificamos ambos para não bloquear logins legítimos.
  */
-function resolveEmail(user: DecodedIdToken): string | null {
+export function resolveEmail(user: DecodedIdToken): string | null {
   if (user.email) return user.email.toLowerCase();
 
   // Fallback: provedores OAuth (GitHub, etc.) que ocultam o email principal
