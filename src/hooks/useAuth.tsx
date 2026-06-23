@@ -1,6 +1,13 @@
 "use client";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
+import {
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+  updateProfile,
+  getAdditionalUserInfo,
+  type User,
+} from "firebase/auth";
 import { auth, googleProvider, githubProvider } from "@/lib/firebase/client";
 
 interface AuthContextValue {
@@ -27,7 +34,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     user,
     loading,
     loginGoogle: async () => { await signInWithPopup(auth, googleProvider); },
-    loginGithub: async () => { await signInWithPopup(auth, githubProvider); },
+    loginGithub: async () => {
+      const result = await signInWithPopup(auth, githubProvider);
+      // GitHub manda o username (login) à parte, não no displayName.
+      const username = getAdditionalUserInfo(result)?.username; // ex.: "Doug1980"
+      // Só preenche se o usuário não tiver um nome próprio definido no GitHub.
+      if (username && !result.user.displayName) {
+        await updateProfile(result.user, { displayName: username });
+      }
+    },
     logout: async () => { await signOut(auth); },
     getToken: async () => (auth.currentUser ? auth.currentUser.getIdToken() : null),
   };
