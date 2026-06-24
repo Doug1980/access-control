@@ -1,14 +1,18 @@
 /**
  * Regras puras de autorização para deleção de usuário.
  *
- * Modelo de permissão:
- *  - Admin remove qualquer um (respeitando proteção do último admin e do root).
- *  - Usuário comum ('user') remove apenas contas de papel 'user' (inclusive a própria),
- *    nunca admins.
+ * Modelo:
+ *  - Admin remove qualquer um (com proteção do último admin e do root).
+ *  - 'user' remove apenas contas 'user' (inclusive a própria), nunca admins,
+ *    e no máximo USER_DELETE_LIMIT por janela de DELETE_WINDOW_MS.
  *
- * Sem I/O: recebe o contexto já resolvido e devolve a decisão, com os mesmos
- * status/mensagens da rota DELETE — fonte única de verdade, fácil de testar.
+ * Sem I/O: recebe o contexto já resolvido (inclusive quantas exclusões o autor
+ * já fez na janela) e devolve a decisão.
  */
+
+// Limite individual de exclusões do 'user' por janela de tempo.
+export const USER_DELETE_LIMIT = 2;
+export const DELETE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
 
 export interface DeletionTarget {
   email: string;
@@ -16,16 +20,13 @@ export interface DeletionTarget {
 }
 
 export interface DeletionContext {
-  /** O autor é admin (raiz via env ou promovido no banco)? */
   callerIsAdmin: boolean;
-  /** O autor é admin raiz (env)? Raiz não pode se autodeletar. */
   callerIsRootAdmin: boolean;
-  /** E-mail confiável do autor, resolvido no servidor (ou null). */
   callerEmail: string | null;
-  /** Usuário alvo da deleção, ou null se não existe. */
   target: DeletionTarget | null;
-  /** Quantidade atual de admins (para proteger o último). */
   adminCount: number;
+  /** Exclusões que o autor já fez na janela atual (admins ignoram o limite). */
+  callerRecentDeletions: number;
 }
 
 export type DeletionDecision =
@@ -43,7 +44,16 @@ export function evaluateUserDeletion(ctx: DeletionContext): DeletionDecision {
     return { ok: false, status: 403, error: "Sem permissão" };
   }
 
-  // 3. Não remover o último admin — o sistema ficaria sem gestão.
+  // 3. Limite diário do 'user' (admin não tem limite).
+  if (!ctx.callerIsAdmin && ctx.callerRecentDeletions >= USER_DELETE_LIMIT) {
+    return {
+      ok: false,
+      status: 403,
+      error: "Limite de exclusões atingido. Tente novamente em 24h.",
+    };
+  }
+
+  // 4. Não remover o último admin — o sistema ficaria sem gestão.
   if (ctx.target.role === "admin" && ctx.adminCount <= 1) {
     return {
       ok: false,
@@ -52,7 +62,7 @@ export function evaluateUserDeletion(ctx: DeletionContext): DeletionDecision {
     };
   }
 
-  // 4. Admin raiz não pode remover a própria conta.
+  // 5. Admin raiz não pode remover a própria conta.
   const callerEmail = ctx.callerEmail?.toLowerCase();
   const targetEmail = ctx.target.email?.toLowerCase();
   if (

@@ -19,7 +19,7 @@ export default function UsersPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
   const toast = useToast();
-  const { isAdmin, email: myEmail, setAdmin } = useIsAdmin();
+  const { isAdmin, email: myEmail, deletionsRemaining, refresh: refreshMe, setAdmin } = useIsAdmin();
 
   const [users, setUsers]       = useState<AppUser[]>([]);
   const [fetching, setFetching] = useState(true);
@@ -117,6 +117,7 @@ export default function UsersPage() {
     try {
       await usersApi.remove(deleting._id);
       setDeleting(null);
+      refreshMe(); // atualiza a cota de exclusões restantes
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Falha ao excluir.");
     }
@@ -173,6 +174,7 @@ export default function UsersPage() {
               loading={fetching}
               hasSearch={search.trim().length > 0}
               isAdmin={isAdmin}
+              deleteDisabled={!isAdmin && (deletionsRemaining ?? Infinity) <= 0}
               onEdit={(u) => { setEditing(u); setFormOpen(true); }}
               onDelete={(u) => setDeleting(u)}
             />

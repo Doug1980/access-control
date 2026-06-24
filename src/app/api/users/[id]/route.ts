@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { verifyRequest, isAdmin, isRootAdmin, resolveEmail } from "@/lib/auth";
-import { evaluateUserDeletion } from "@/lib/authz";
+import { evaluateUserDeletion, DELETE_WINDOW_MS } from "@/lib/authz";
+import { recordDeletion, countRecentDeletions } from "@/lib/deletionLog";
 import { pusherServer } from "@/lib/pusher";
 import { validateUpdateUser } from "@/lib/validate";
 import { rateLimit } from "@/lib/rateLimit";
@@ -61,7 +62,6 @@ export async function PATCH(
     return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
   }
 
-  // Allowlist explícita — apenas campos validados chegam ao banco.
   const safeUpdate: Record<string, string> = {};
   if (validation.data.name)  safeUpdate.name  = validation.data.name;
   if (validation.data.email) safeUpdate.email = validation.data.email;
@@ -72,7 +72,7 @@ export async function PATCH(
       validation.data.role !== "admin" &&
       isRootAdmin({ email: target.email } as never)
     ) {
-      safeUpdate.role = target.role; // admin comum não rebaixa o root
+      safeUpdate.role = target.role;
     } else {
       safeUpdate.role = validation.data.role;
     }
@@ -118,27 +118,33 @@ export async function DELETE(
 
   const db = await getDb();
 
-  // Projeção inclui `role` — necessário para a autorização e a regra do "último admin".
   const target = await db
     .collection("users")
     .findOne({ _id: new ObjectId(id) }, { projection: { email: 1, role: 1 } });
 
   const callerIsAdmin = await isAdmin(user);
+  const callerEmail = resolveEmail(user);
 
   const adminCount =
     (target?.role as string | undefined) === "admin"
       ? await db.collection("users").countDocuments({ role: "admin" })
       : 0;
 
-  // Decisão de autorização centralizada e testada em src/lib/authz.ts.
+  // Conta exclusões recentes do autor (admins ignoram o limite, então pulamos).
+  const callerRecentDeletions =
+    !callerIsAdmin && callerEmail
+      ? await countRecentDeletions(callerEmail, DELETE_WINDOW_MS)
+      : 0;
+
   const decision = evaluateUserDeletion({
     callerIsAdmin,
     callerIsRootAdmin: isRootAdmin(user),
-    callerEmail: resolveEmail(user),
+    callerEmail,
     target: target
       ? { email: target.email as string, role: target.role as string }
       : null,
     adminCount,
+    callerRecentDeletions,
   });
 
   if (!decision.ok) {
@@ -152,6 +158,9 @@ export async function DELETE(
   if (deletedCount === 0) {
     return NextResponse.json({ error: "Usuário não encontrado" }, { status: 404 });
   }
+
+  // Registra a exclusão (conta para o limite e serve de auditoria).
+  if (callerEmail) await recordDeletion(callerEmail, id);
 
   await pusherServer.trigger("users", "user:deleted", { id }).catch(() => {});
 

@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { verifyRequest, isAdmin, resolveEmail } from "@/lib/auth";
+import { countRecentDeletions } from "@/lib/deletionLog";
+import { USER_DELETE_LIMIT, DELETE_WINDOW_MS } from "@/lib/authz";
 
 export const runtime = "nodejs";
 
-// Informa ao front quem é o usuário logado e se ele é admin.
+// Informa ao front quem é o usuário logado, se é admin e quantas exclusões
+// ainda restam hoje (para a UI desabilitar a lixeira ao atingir o limite).
 // Também auto-registra o usuário no banco na primeira vez que acessa.
 export async function GET(req: Request) {
   const user = await verifyRequest(req);
@@ -14,7 +17,7 @@ export async function GET(req: Request) {
 
   const email = resolveEmail(user);
 
-  // Auto-registro: se o usuário não existe no banco, cria como "user"
+  // Auto-registro: se o usuário não existe no banco, cria como "user".
   if (email) {
     const db = await getDb();
     const exists = await db.collection("users").findOne({ email });
@@ -26,12 +29,18 @@ export async function GET(req: Request) {
         role:      "user",
         createdAt: now,
         updatedAt: now,
-      }).catch(() => {}); // ignora race condition (dois requests simultâneos)
+      }).catch(() => {});
     }
   }
 
-  return NextResponse.json({
-    email,
-    isAdmin: await isAdmin(user),
-  });
+  const admin = await isAdmin(user);
+
+  // deletionsRemaining: null = sem limite (admin); número = quantas faltam (user).
+  let deletionsRemaining: number | null = null;
+  if (email && !admin) {
+    const used = await countRecentDeletions(email, DELETE_WINDOW_MS);
+    deletionsRemaining = Math.max(0, USER_DELETE_LIMIT - used);
+  }
+
+  return NextResponse.json({ email, isAdmin: admin, deletionsRemaining });
 }

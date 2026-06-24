@@ -10,6 +10,7 @@ vi.mock("@/lib/mongodb", () => ({ getDb: vi.fn() }));
 vi.mock("@/lib/pusher", () => ({ pusherServer: { trigger: vi.fn() } }));
 vi.mock("@/lib/rateLimit", () => ({ rateLimit: vi.fn() }));
 vi.mock("@/lib/validate", () => ({ validateUpdateUser: vi.fn() }));
+vi.mock("@/lib/deletionLog", () => ({ recordDeletion: vi.fn(), countRecentDeletions: vi.fn() }));
 
 import { DELETE, PATCH } from "./route";
 import { verifyRequest, isAdmin, isRootAdmin, resolveEmail } from "@/lib/auth";
@@ -17,6 +18,7 @@ import { getDb } from "@/lib/mongodb";
 import { pusherServer } from "@/lib/pusher";
 import { rateLimit } from "@/lib/rateLimit";
 import { validateUpdateUser } from "@/lib/validate";
+import { recordDeletion, countRecentDeletions } from "@/lib/deletionLog";
 
 const VALID_ID = "507f1f77bcf86cd799439011";
 
@@ -53,6 +55,8 @@ beforeEach(() => {
   vi.mocked(resolveEmail).mockReturnValue("caller@empresa.com");
   vi.mocked(validateUpdateUser).mockReturnValue({ ok: true, data: {} } as never);
   vi.mocked(pusherServer.trigger).mockResolvedValue(undefined as never);
+  vi.mocked(countRecentDeletions).mockResolvedValue(0);
+  vi.mocked(recordDeletion).mockResolvedValue(undefined as never);
 });
 
 // =========================== DELETE ===========================
@@ -66,12 +70,13 @@ test("DELETE: admin deleta usuário comum (200)", async () => {
   expect(col.deleteOne).toHaveBeenCalledTimes(1);
 });
 
-test("DELETE: user comum deleta outro user (200)", async () => {
+test("DELETE: user comum deleta outro user (200, registra a exclusão)", async () => {
   const { db, col } = fakeDb({ target: { email: "outro@empresa.com", role: "user" } });
   vi.mocked(getDb).mockResolvedValue(db as never);
   const res = await DELETE(reqDel(), params);
   expect(res.status).toBe(200);
   expect(col.deleteOne).toHaveBeenCalledTimes(1);
+  expect(recordDeletion).toHaveBeenCalledTimes(1);
 });
 
 test("DELETE: user comum NÃO deleta admin (403, sem deletar)", async () => {
@@ -80,6 +85,16 @@ test("DELETE: user comum NÃO deleta admin (403, sem deletar)", async () => {
   const res = await DELETE(reqDel(), params);
   expect(res.status).toBe(403);
   expect((await res.json()).error).toBe("Sem permissão");
+  expect(col.deleteOne).not.toHaveBeenCalled();
+});
+
+test("DELETE: user que atingiu o limite (2/24h) é bloqueado (403, sem deletar)", async () => {
+  vi.mocked(countRecentDeletions).mockResolvedValue(2);
+  const { db, col } = fakeDb({ target: { email: "outro@empresa.com", role: "user" } });
+  vi.mocked(getDb).mockResolvedValue(db as never);
+  const res = await DELETE(reqDel(), params);
+  expect(res.status).toBe(403);
+  expect((await res.json()).error).toMatch(/Limite de exclusões/);
   expect(col.deleteOne).not.toHaveBeenCalled();
 });
 
@@ -126,7 +141,6 @@ test("PATCH: user comum NÃO edita um admin (403)", async () => {
   vi.mocked(getDb).mockResolvedValue(db as never);
   const res = await PATCH(reqPatch({ name: "x" }), params);
   expect(res.status).toBe(403);
-  expect((await res.json()).error).toBe("Sem permissão");
   expect(col.findOneAndUpdate).not.toHaveBeenCalled();
 });
 

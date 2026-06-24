@@ -7,12 +7,15 @@ export function useIsAdmin() {
   const { user, getToken } = useAuth();
   const [isAdmin, setIsAdmin] = useState(false);
   const [email, setEmail] = useState<string | null>(null);
+  // null = sem limite (admin); número = exclusões restantes hoje (user).
+  const [deletionsRemaining, setDeletionsRemaining] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
   const check = useCallback(async () => {
     if (!user) {
       setIsAdmin(false);
       setEmail(null);
+      setDeletionsRemaining(null);
       setLoading(false);
       return;
     }
@@ -28,6 +31,7 @@ export function useIsAdmin() {
       const data = await res.json();
       setIsAdmin(data.isAdmin === true);
       setEmail(data.email ?? null); // e-mail CONFIÁVEL, resolvido no servidor
+      setDeletionsRemaining(data.deletionsRemaining ?? null);
     } catch {
       // erro transitório: mantém estado atual
     } finally {
@@ -39,11 +43,9 @@ export function useIsAdmin() {
     check();
   }, [check]);
 
-  // Aplica diretamente um valor de admin (usado quando o evento Pusher já
-  // traz o role atualizado — evita re-consultar o servidor e a race com o banco).
   const setAdmin = useCallback((value: boolean) => {
     setIsAdmin(value);
   }, []);
 
-  return { isAdmin, email, loading, refresh: check, setAdmin };
+  return { isAdmin, email, deletionsRemaining, loading, refresh: check, setAdmin };
 }

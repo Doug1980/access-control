@@ -12,6 +12,8 @@ interface Props {
   hasSearch: boolean;
   /** O autor logado é admin? A UI decide as ações por linha; a segurança real é no servidor. */
   isAdmin: boolean;
+  /** Cota de exclusão esgotada (o user atingiu o limite diário). */
+  deleteDisabled: boolean;
   onEdit: (user: AppUser) => void;
   onDelete: (user: AppUser) => void;
 }
@@ -42,6 +44,7 @@ export function UserTable({
   loading,
   hasSearch,
   isAdmin,
+  deleteDisabled,
   onEdit,
   onDelete,
 }: Props) {
@@ -106,7 +109,7 @@ export function UserTable({
                         </button>
                       )}
                       {(isAdmin || u.role === "user") && (
-                        <button onClick={() => onDelete(u)} className="grid size-8 place-items-center rounded-lg text-text-muted hover:bg-danger-soft hover:text-danger" aria-label={`Excluir ${u.name}`} title="Excluir">
+                        <button onClick={() => onDelete(u)} disabled={deleteDisabled} className="grid size-8 place-items-center rounded-lg text-text-muted hover:bg-danger-soft hover:text-danger disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-text-muted" aria-label={`Excluir ${u.name}`} title={deleteDisabled ? "Limite de exclusões atingido (2 por 24h)" : "Excluir"}>
                           <TrashGlyph className="size-[17px]" />
                         </button>
                       )}
