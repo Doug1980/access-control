@@ -3,7 +3,7 @@
 Painel de gestão de usuários com autenticação, controle de acesso por papéis (RBAC) e sincronização em tempo real via WebSocket. Qualquer alteração feita por um usuário autorizado é refletida instantaneamente em todos os clientes conectados, sem recarregar a página.
 
 **🔗 Demo em produção:** [crud-usuarios-beta.vercel.app](https://crud-usuarios-beta.vercel.app)
-**📦 Repositório:** [github.com/Doug1980/crud-usuarios](https://github.com/Doug1980/crud-usuarios)
+**📦 Repositório:** [github.com/Doug1980/access-control](https://github.com/Doug1980/access-control)
 
 ---
 
@@ -55,6 +55,9 @@ O grande diferencial é o **RBAC dinâmico**: um usuário comum pode ser promovi
 - **CRUD completo** de usuários (criar, listar, editar, excluir), persistido no MongoDB.
 - **Autenticação social** com Google e GitHub via Firebase Auth.
 - **Controle de acesso por papel (RBAC)** validado no servidor a cada requisição.
+- **Hierarquia de gestão** — admin gerencia todos; usuário comum gerencia apenas outros usuários comuns; admins são intocáveis para ele.
+- **Limite de exclusões** — cada usuário comum remove no máximo 2 contas por 24h (admin sem limite), com contagem persistente.
+- **Proteções de integridade** — não é possível remover o último admin, nem o admin raiz se autodeletar.
 - **Sincronização em tempo real** — criações, edições e exclusões propagam para todas as abas/clientes conectados via WebSocket.
 - **RBAC dinâmico** — promoção e rebaixamento de papel aplicados em tempo real, sem refresh.
 - **Notificações contextuais** (toasts) para cada evento, incluindo aviso de mudança do próprio papel.
@@ -68,12 +71,14 @@ O grande diferencial é o **RBAC dinâmico**: um usuário comum pode ser promovi
 | Ação | Usuário comum | Admin |
 |---|:---:|:---:|
 | Listar usuários | ✅ | ✅ |
-| Criar usuário | ✅ | ✅ |
-| Editar usuário | ✅ | ✅ |
-| Excluir usuário | ❌ | ✅ |
-| Atribuir papel "admin" | ❌ | ✅ |
+| Criar usuário | ✅ (sempre como `user`) | ✅ |
+| Editar / excluir **outro usuário comum** | ✅ | ✅ |
+| Editar / excluir um **admin** | ❌ | ✅ |
+| Limite de exclusões por 24h | 2 | sem limite |
+| Atribuir / alterar papel (`admin` ⇄ `user`) | ❌ | ✅ |
+| Remover o último admin · autodeletar o root | ❌ | ❌ |
 
-> A autorização é **sempre** revalidada no servidor. O front-end apenas oculta ou desabilita ações por questão de experiência — a decisão real de permissão nunca depende do cliente.
+> A autorização é **sempre** revalidada no servidor — as rotas derivam o papel efetivo do token autenticado. O front-end apenas oculta ou desabilita ações (inclusive a lixeira ao atingir o limite) por questão de experiência; a decisão real de permissão nunca depende do cliente.
 
 ---
 
@@ -126,20 +131,27 @@ Esta seção documenta os problemas mais relevantes enfrentados e como foram res
 ```
 src/
 ├── app/
-│   ├── login/page.tsx          # Tela de login (Google/GitHub)
-│   ├── admin/page.tsx          # Painel principal + tempo real
+│   ├── login/page.tsx           # Tela de login (Google/GitHub)
+│   ├── admin/
+│   │   ├── page.tsx             # Dashboard (métricas) + tempo real
+│   │   └── users/page.tsx       # Gestão de usuários (tabela, ações)
 │   └── api/
-│       ├── users/route.ts      # GET (listar) + POST (criar)
-│       ├── users/[id]/route.ts # PATCH (editar) + DELETE (excluir)
-│       └── me/route.ts         # Identidade e papel do usuário logado
-├── components/                 # Sidebar, tabela, modais, cards, ícones
-├── hooks/                      # useAuth, useTheme, useToast, usePusher, useIsAdmin
+│       ├── users/route.ts       # GET (listar) + POST (criar)
+│       ├── users/[id]/route.ts  # PATCH (editar) + DELETE (excluir)
+│       └── me/route.ts          # Identidade, papel e cota de exclusões
+├── components/                  # Sidebar, tabela, modais, cards, ícones
+├── hooks/                       # useAuth, useTheme, useToast, usePusher, useIsAdmin
 ├── lib/
-│   ├── firebase/               # Client SDK + Admin SDK (verificação de token)
-│   ├── mongodb.ts              # Conexão singleton com o MongoDB
-│   ├── pusher.ts               # Cliente Pusher do servidor
-│   └── auth.ts                 # Verificação de token + lógica de autorização
-└── types/                      # Tipagem do domínio
+│   ├── firebase/                # Client SDK + Admin SDK (verificação de token)
+│   ├── mongodb.ts               # Conexão singleton com o MongoDB
+│   ├── pusher.ts                # Cliente Pusher do servidor
+│   ├── auth.ts                  # Verificação de token + autorização (admin/root)
+│   ├── authz.ts                 # Política pura de deleção (regras + limite 2/24h)
+│   ├── deletionLog.ts           # Registro/contagem de exclusões (deletion_events)
+│   ├── validate.ts              # Validação de input por allowlist
+│   └── rateLimit.ts             # Rate limiting por IP
+├── types/                       # Tipagem do domínio
+└── (arquivos *.test.ts)         # Testes Vitest — política e rotas
 ```
 
 ### Fluxo de uma operação
@@ -149,6 +161,23 @@ src/
 3. A alteração é persistida no MongoDB.
 4. Um evento é disparado no Pusher (`user:created` / `user:updated` / `user:deleted`).
 5. Todos os clientes conectados recebem o evento e atualizam a interface em tempo real.
+
+---
+
+## Testes
+
+Cobertura focada no núcleo de autorização, com **Vitest**:
+
+```bash
+npm test
+```
+
+São **26 casos**, divididos em:
+
+- **Política pura** (`authz.ts`) — todos os ramos da decisão de exclusão: hierarquia por papel, limite diário (2/24h), proteção do último admin e da autodeleção do root.
+- **Integração das rotas** (`GET`/`POST`/`PATCH`/`DELETE`) — com as fronteiras (auth, banco, Pusher) mockadas, validando status HTTP e efeitos colaterais.
+
+A lógica de permissão fica isolada numa função pura (testada em unidade) e as rotas são testadas em integração. Os arquivos `*.test.ts` ficam fora do build de produção.
 
 ---
 
@@ -163,8 +192,8 @@ src/
 
 ```bash
 # 1. Clone o repositório
-git clone https://github.com/Doug1980/crud-usuarios.git
-cd crud-usuarios
+git clone https://github.com/Doug1980/access-control.git
+cd access-control
 
 # 2. Instale as dependências
 npm install
@@ -225,6 +254,18 @@ O projeto está hospedado na Vercel. Pontos de atenção para reproduzir o deplo
 - Adicionar o domínio de produção aos **Authorized Domains** do Firebase Auth.
 - Liberar o acesso de rede no MongoDB Atlas para o ambiente serverless.
 - O build de produção utiliza Webpack (configurado no script `build`).
+
+---
+
+## Limitações conhecidas
+
+O modelo atual é adequado para um público **confiável / interno**. Para um cadastro **aberto ao público geral**, três pontos seriam pré-requisito — decisões de escopo, não defeitos:
+
+- A listagem (`GET /api/users`) exige apenas autenticação, então qualquer usuário logado enxerga os e-mails de todos — restringir a admin ou mascarar/omitir no servidor.
+- Os eventos em tempo real (Pusher) trafegam o objeto do usuário no payload — migrar para canal privado/autenticado.
+- A criação (`POST`) está aberta a qualquer autenticado (sempre como `user`) — restringir a admin, se aplicável ao caso de uso.
+
+O rate limiting de borda é em memória (best-effort no serverless); já o limite de exclusões, por ser baseado no banco (`deletion_events`), é confiável e individual por usuário.
 
 ---
 
